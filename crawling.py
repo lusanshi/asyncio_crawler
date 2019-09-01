@@ -7,7 +7,7 @@ import logging
 import re
 import time
 import urllib.parse
-from asyncio import Queue
+# from asyncio import Queue
 
 import aiohttp
 
@@ -41,6 +41,7 @@ class Crawler:
     This manages two sets of URLs: 'urls' and 'done'.  'urls' is a set of
     URLs seen, and 'done' is a list of FetchStatistics.
     """
+
     def __init__(self, roots,
                  exclude=None, strict=True,  # What to crawl.
                  max_redirect=10, max_tries=4,  # Per-url limits.
@@ -52,14 +53,14 @@ class Crawler:
         self.max_redirect = max_redirect
         self.max_tries = max_tries
         self.max_tasks = max_tasks
-        self.q = Queue(loop=self.loop)
+        self.q = asyncio.Queue(loop=self.loop)
         self.seen_urls = set()
         self.done = []
         self.session = aiohttp.ClientSession(loop=self.loop)
         self.root_domains = set()
         for root in roots:
             parts = urllib.parse.urlparse(root)
-            host, port = urllib.parse.splitport(parts.netloc)
+            host = urllib.parse.splitport(parts.netloc)[0]
             if not host:
                 continue
             if re.match(r'\A[\d\.]*\Z', host):
@@ -142,7 +143,7 @@ class Crawler:
                                 len(urls), response.url)
                 for url in urls:
                     normalized = urllib.parse.urljoin(response.url, url)
-                    defragmented, frag = urllib.parse.urldefrag(normalized)
+                    defragmented = urllib.parse.urldefrag(normalized)[0]
                     if self.url_allowed(defragmented):
                         links.add(defragmented)
 
@@ -174,7 +175,8 @@ class Crawler:
 
                 break
             except aiohttp.ClientError as client_error:
-                LOGGER.info('try %r for %r raised %r', tries, url, client_error)
+                LOGGER.info('try %r for %r raised %r',
+                            tries, url, client_error)
                 exception = client_error
 
             tries += 1
@@ -243,7 +245,7 @@ class Crawler:
         if parts.scheme not in ('http', 'https'):
             LOGGER.debug('skipping non-http scheme in %r', url)
             return False
-        host, port = urllib.parse.splitport(parts.netloc)
+        host = urllib.parse.splitport(parts.netloc)[0]
         if not self.host_okay(host):
             LOGGER.debug('skipping non-root host in %r', url)
             return False
