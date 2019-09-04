@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6.8
+#!/usr/bin/env python3.7
 
 """A simple web crawler -- main driver program."""
 
@@ -29,7 +29,7 @@ ARGS.add_argument(
     default=4, help='Limit retries on network errors')
 ARGS.add_argument(
     '--max_tasks', action='store', type=int, metavar='N',
-    default=100, help='Limit concurrent connections')
+    default=10, help='Limit concurrent connections')
 ARGS.add_argument(
     '--exclude', action='store', metavar='REGEX',
     help='Exclude matching URLs')
@@ -85,6 +85,7 @@ def main():
                                max_redirect=args.max_redirect,
                                max_tries=args.max_tries,
                                max_tasks=args.max_tasks,
+                               loop=loop,
                                )
     try:
         loop.run_until_complete(crawler.crawl())  # Crawler gonna crawl.
@@ -93,7 +94,6 @@ def main():
         print('\nInterrupted\n')
     finally:
         reporting.report(crawler)
-        crawler.close()
 
         # next two lines are required for actual aiohttp resource cleanup
         loop.stop()

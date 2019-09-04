@@ -16,11 +16,7 @@ LOGGER = logging.getLogger(__name__)
 
 def lenient_host(host):
     parts = host.split('.')[-2:]
-    return ''.join(parts)
-
-
-def is_redirect(response):
-    return response.status in (300, 301, 302, 303, 307)
+    return '.'.join(parts)  #changed from ''
 
 
 FetchStatistic = namedtuple('FetchStatistic',
@@ -56,14 +52,14 @@ class Crawler:
         self.q = asyncio.Queue(loop=self.loop)
         self.seen_urls = set()
         self.done = []
-        self.session = aiohttp.ClientSession(loop=self.loop)
+        self.session = None
         self.root_domains = set()
         for root in roots:
             parts = urllib.parse.urlparse(root)
             host = urllib.parse.splitport(parts.netloc)[0]
             if not host:
                 continue
-            if re.match(r'\A[\d\.]*\Z', host):
+            if re.match(r'^[\d\.]*$', host):
                 self.root_domains.add(host)
             else:
                 host = host.lower()
@@ -73,12 +69,9 @@ class Crawler:
                     self.root_domains.add(lenient_host(host))
         for root in roots:
             self.add_url(root)
-        self.t0 = time.time()
+        self.t0 = None
         self.t1 = None
 
-    def close(self):
-        """Close resources."""
-        self.session.close()
 
     def host_okay(self, host):
         """Check if a host should be crawled.
@@ -116,16 +109,15 @@ class Crawler:
         """Record the FetchStatistic for completed / failed URL."""
         self.done.append(fetch_statistic)
 
-    @asyncio.coroutine
-    def parse_links(self, response):
+    async def parse_links(self, response):
         """Return a FetchStatistic and list of links."""
         links = set()
         content_type = None
         encoding = None
-        body = yield from response.read()
+        body = await response.read()
 
         if response.status == 200:
-            content_type = response.headers.get('content-type')
+            content_type = response.content_type
             pdict = {}
 
             if content_type:
@@ -133,16 +125,14 @@ class Crawler:
 
             encoding = pdict.get('charset', 'utf-8')
             if content_type in ('text/html', 'application/xml'):
-                text = yield from response.text()
+                text = await response.text()
 
                 # Replace href with (?:href|src) to follow image links.
-                urls = set(re.findall(r'''(?i)href=["']([^\s"'<>]+)''',
-                                      text))
+                urls = set(re.findall(r'''(?i)href=["']([^\s"'<>]+)''', text))
                 if urls:
-                    LOGGER.info('got %r distinct urls from %r',
-                                len(urls), response.url)
+                    LOGGER.info('got %r distinct urls from %r', len(urls), response.url)
                 for url in urls:
-                    normalized = urllib.parse.urljoin(response.url, url)
+                    normalized = urllib.parse.urljoin(str(response.url), url)
                     defragmented = urllib.parse.urldefrag(normalized)[0]
                     if self.url_allowed(defragmented):
                         links.add(defragmented)
@@ -160,15 +150,13 @@ class Crawler:
 
         return stat, links
 
-    @asyncio.coroutine
-    def fetch(self, url, max_redirect):
+    async def fetch(self, url, max_redirect):
         """Fetch one URL."""
         tries = 0
         exception = None
         while tries < self.max_tries:
             try:
-                response = yield from self.session.get(
-                    url, allow_redirects=False)
+                response = await self.session.get(url, allow_redirects=False)
 
                 if tries > 1:
                     LOGGER.info('try %r for %r success', tries, url)
@@ -182,8 +170,7 @@ class Crawler:
             tries += 1
         else:
             # We never broke out of the loop: all tries failed.
-            LOGGER.error('%r failed after %r tries',
-                         url, self.max_tries)
+            LOGGER.error('%r failed after %r tries', url, self.max_tries)
             self.record_statistic(FetchStatistic(url=url,
                                                  next_url=None,
                                                  status=None,
@@ -196,7 +183,7 @@ class Crawler:
             return
 
         try:
-            if is_redirect(response):
+            if response.status in (300, 301, 302, 303, 307):
                 location = response.headers['location']
                 next_url = urllib.parse.urljoin(url, location)
                 self.record_statistic(FetchStatistic(url=url,
@@ -218,22 +205,21 @@ class Crawler:
                     LOGGER.error('redirect limit reached for %r from %r',
                                  next_url, url)
             else:
-                stat, links = yield from self.parse_links(response)
+                stat, links = await self.parse_links(response)
                 self.record_statistic(stat)
                 for link in links.difference(self.seen_urls):
                     self.q.put_nowait((link, self.max_redirect))
                 self.seen_urls.update(links)
         finally:
-            yield from response.release()
+            await response.release()
 
-    @asyncio.coroutine
-    def work(self):
+    async def work(self):
         """Process queue items forever."""
         try:
             while True:
-                url, max_redirect = yield from self.q.get()
+                url, max_redirect = await self.q.get()
                 assert url in self.seen_urls
-                yield from self.fetch(url, max_redirect)
+                await self.fetch(url, max_redirect)
                 self.q.task_done()
         except asyncio.CancelledError:
             pass
@@ -259,13 +245,13 @@ class Crawler:
         self.seen_urls.add(url)
         self.q.put_nowait((url, max_redirect))
 
-    @asyncio.coroutine
-    def crawl(self):
+    async def crawl(self):
         """Run the crawler until all finished."""
-        workers = [asyncio.Task(self.work(), loop=self.loop)
-                   for _ in range(self.max_tasks)]
-        self.t0 = time.time()
-        yield from self.q.join()
-        self.t1 = time.time()
-        for w in workers:
-            w.cancel()
+        async with aiohttp.ClientSession(loop=self.loop) as session:
+            self.session = session
+            self.t0 = time.time()
+            workers = [asyncio.ensure_future(self.work(), loop=self.loop) for _ in range(self.max_tasks)]
+            await self.q.join()
+            self.t1 = time.time()
+            for w in workers:
+                w.cancel()
