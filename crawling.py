@@ -12,9 +12,11 @@ import aiohttp
 
 LOGGER = logging.getLogger(__name__)
 
+
 def lenient_host(host):
     parts = host.split('.')[-2:]
-    return '.'.join(parts)  #changed from ''
+    return '.'.join(parts)  # changed from ''
+
 
 FetchStatistic = namedtuple('FetchStatistic', ['url',
                                                'next_url',
@@ -37,7 +39,7 @@ class Crawler:
     def __init__(self, roots,
                  exclude=None, strict=True,  # What to crawl.
                  max_redirect=10, max_tries=4,  # Per-url limits.
-                 max_tasks=10, *, loop=None):
+                 max_tasks=10, proxy=False, *, loop=None):
         self.loop = loop or asyncio.get_event_loop()
         self.roots = roots
         self.exclude = exclude
@@ -45,6 +47,7 @@ class Crawler:
         self.max_redirect = max_redirect
         self.max_tries = max_tries
         self.max_tasks = max_tasks
+        self.proxy = proxy
         self.q = asyncio.Queue(loop=self.loop)
         self.seen_urls = set()
         self.done = []
@@ -68,7 +71,6 @@ class Crawler:
         self.t0 = None
         self.t1 = None
 
-
     def host_okay(self, host):
         """Check if a host should be crawled.
 
@@ -85,6 +87,19 @@ class Crawler:
             return self._host_okay_strictish(host)
         else:
             return self._host_okay_lenient(host)
+
+    async def get_proxy(self):
+        '''Get the proxy from the Redis server'''
+        async with self.session.get("http://127.0.0.1:5010/get/") as response:
+            json_response = await response.json(content_type="text/plain")
+            proxy = json_response.get("proxy")
+            return 'http://{}'.format(proxy)
+
+    async def delete_proxy(self, proxy):
+        '''Drop the proxy that failed with 3 tries'''
+        r = await self.session.get(
+            "http://127.0.0.1:5010/delete/?proxy={}".format(proxy))
+        r.release()
 
     def _host_okay_strictish(self, host):
         """Check if a host should be crawled, strict-ish version.
@@ -129,7 +144,8 @@ class Crawler:
                 # Replace href with (?:href|src) to follow image links.
                 urls = set(re.findall(r'''(?i)href=["']([^\s"'<>]+)''', text))
                 if urls:
-                    LOGGER.info('got %r distinct urls from %r', len(urls), response.url)
+                    LOGGER.info('got %r distinct urls from %r',
+                                len(urls), response.url)
                 for url in urls:
                     normalized = urllib.parse.urljoin(str(response.url), url)
                     defragmented = urllib.parse.urldefrag(normalized)[0]
@@ -151,11 +167,16 @@ class Crawler:
 
     async def fetch(self, url, max_redirect):
         """Fetch one URL."""
+        if self.proxy:
+            proxy = await self.get_proxy()
+        else:
+            proxy = None
         tries = 0
         exception = None
         while tries < self.max_tries:
             try:
-                response = await self.session.get(url, allow_redirects=False)
+                response = await self.session.get(url, allow_redirects=False,
+                                                  proxy=proxy)
 
                 if tries > 1:
                     LOGGER.info('try %r for %r success', tries, url)
@@ -249,7 +270,8 @@ class Crawler:
         async with aiohttp.ClientSession(loop=self.loop) as session:
             self.session = session
             self.t0 = time.time()
-            workers = [asyncio.ensure_future(self.work(), loop=self.loop) for _ in range(self.max_tasks)]
+            workers = [asyncio.ensure_future(
+                self.work(), loop=self.loop) for _ in range(self.max_tasks)]
             await self.q.join()
             self.t1 = time.time()
             for w in workers:

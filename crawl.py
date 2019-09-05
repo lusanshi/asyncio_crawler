@@ -28,7 +28,7 @@ ARGS.add_argument(
     default=5, help='Limit redirection chains (for 301, 302 etc.)')
 ARGS.add_argument(
     '--max_tries', action='store', type=int, metavar='N',
-    default=4, help='Limit retries on network errors')
+    default=3, help='Limit retries on network errors')
 ARGS.add_argument(
     '--max_tasks', action='store', type=int, metavar='N',
     default=100, help='Limit concurrent connections')
@@ -47,6 +47,9 @@ ARGS.add_argument(
 ARGS.add_argument(
     '-q', '--quiet', action='store_const', const=0, dest='level',
     default=2, help='Only log errors')
+ARGS.add_argument(
+    '-p', '--proxy', action='store_true', dest='proxy', default=False,
+    help='Use proxy')
 
 
 def fix_url(url):
@@ -87,6 +90,7 @@ def main():
                                max_redirect=args.max_redirect,
                                max_tries=args.max_tries,
                                max_tasks=args.max_tasks,
+                               proxy=args.proxy,
                                loop=loop,
                                )
     try:
