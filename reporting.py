@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Reporting subsystem for web crawler."""
 
 import time
@@ -29,12 +30,13 @@ def report(crawler, file=None):
     print('*** Report ***', file=file)
     try:
         show = list(crawler.done)
-        show.sort(key=lambda _stat: _stat.url)
+        show.sort(key=lambda _stat: str(_stat.url))
         for stat in show:
             url_report(stat, stats, file=file)
     except KeyboardInterrupt:
         print('\nInterrupted', file=file)
-    print('Finished', len(crawler.done),
+    print('Finished',
+          len(crawler.done),
           'urls in %.3f secs' % dt,
           '(max_tasks=%d)' % crawler.max_tasks,
           '(%.3f urls/sec/task)' % speed,
@@ -56,8 +58,7 @@ def url_report(stat, stats, file=None):
         print(stat.url, 'error', stat.exception, file=file)
     elif stat.next_url:
         stats.add('redirect')
-        print(stat.url, stat.status, 'redirect', stat.next_url,
-              file=file)
+        print(stat.url, stat.status, 'redirect', stat.next_url, file=file)
     elif stat.content_type == 'text/html':
         stats.add('html')
         stats.add('html_bytes', stat.size)
@@ -74,7 +75,9 @@ def url_report(stat, stats, file=None):
             stats.add('error')
             stats.add('error_bytes', stat.size)
             stats.add('status_%s' % stat.status)
-        print(stat.url, stat.status,
-              stat.content_type, stat.encoding,
+        print(stat.url,
+              stat.status,
+              stat.content_type,
+              stat.encoding,
               stat.size,
               file=file)

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """A simple web crawler -- class implementing crawling logic."""
 
 import asyncio
@@ -7,28 +8,23 @@ import logging
 import re
 import time
 import urllib.parse
-# from asyncio import Queue
-
 import aiohttp
 
 LOGGER = logging.getLogger(__name__)
-
 
 def lenient_host(host):
     parts = host.split('.')[-2:]
     return '.'.join(parts)  #changed from ''
 
-
-FetchStatistic = namedtuple('FetchStatistic',
-                            ['url',
-                             'next_url',
-                             'status',
-                             'exception',
-                             'size',
-                             'content_type',
-                             'encoding',
-                             'num_urls',
-                             'num_new_urls'])
+FetchStatistic = namedtuple('FetchStatistic', ['url',
+                                               'next_url',
+                                               'status',
+                                               'exception',
+                                               'size',
+                                               'content_type',
+                                               'encoding',
+                                               'num_urls',
+                                               'num_new_urls'])
 
 
 class Crawler:
@@ -125,7 +121,10 @@ class Crawler:
 
             encoding = pdict.get('charset', 'utf-8')
             if content_type in ('text/html', 'application/xml'):
-                text = await response.text()
+                try:
+                    text = await response.text()
+                except UnicodeDecodeError:
+                    text = await response.text(encoding='GB18030')
 
                 # Replace href with (?:href|src) to follow image links.
                 urls = set(re.findall(r'''(?i)href=["']([^\s"'<>]+)''', text))

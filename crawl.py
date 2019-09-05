@@ -1,4 +1,5 @@
-#!/usr/bin/env python3.7
+#!/usr/bin/env python3.6.8
+# -*- coding: utf-8 -*-
 
 """A simple web crawler -- main driver program."""
 
@@ -6,9 +7,10 @@ import argparse
 import asyncio
 import logging
 import sys
-
+import os
 import crawling
 import reporting
+import datetime
 
 
 ARGS = argparse.ArgumentParser(description="Web crawler")
@@ -23,13 +25,13 @@ ARGS.add_argument(
     default=[], help='Root URL (may be repeated)')
 ARGS.add_argument(
     '--max_redirect', action='store', type=int, metavar='N',
-    default=10, help='Limit redirection chains (for 301, 302 etc.)')
+    default=5, help='Limit redirection chains (for 301, 302 etc.)')
 ARGS.add_argument(
     '--max_tries', action='store', type=int, metavar='N',
     default=4, help='Limit retries on network errors')
 ARGS.add_argument(
     '--max_tasks', action='store', type=int, metavar='N',
-    default=10, help='Limit concurrent connections')
+    default=100, help='Limit concurrent connections')
 ARGS.add_argument(
     '--exclude', action='store', metavar='REGEX',
     help='Exclude matching URLs')
@@ -93,7 +95,10 @@ def main():
         sys.stderr.flush()
         print('\nInterrupted\n')
     finally:
-        reporting.report(crawler)
+        path = os.getcwd() + "/log"
+        now = datetime.datetime.today().strftime('%Y-%m-%d %H:%M:%S')
+        with open(os.path.join(path, "{}.log".format(now)), "w") as f:
+            reporting.report(crawler, file=f)
 
         # next two lines are required for actual aiohttp resource cleanup
         loop.stop()
