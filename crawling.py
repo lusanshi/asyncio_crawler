@@ -1,14 +1,15 @@
-# -*- coding: utf-8 -*-
 """A simple web crawler -- class implementing crawling logic."""
 
 import asyncio
 import cgi
-from collections import namedtuple
 import logging
 import re
 import time
 import urllib.parse
+from collections import namedtuple
+
 import aiohttp
+from proxypool import *
 
 LOGGER = logging.getLogger(__name__)
 
@@ -36,9 +37,8 @@ class Crawler:
     URLs seen, and 'done' is a list of FetchStatistics.
     """
 
-    def __init__(self, roots,
-                 exclude=None, strict=True,  # What to crawl.
-                 max_redirect=10, max_tries=4,  # Per-url limits.
+    def __init__(self, roots, exclude=None, strict=True,  # What to crawl.
+                 max_redirect=1, max_tries=3,  # Per-url limits.
                  max_tasks=10, proxy=False, *, loop=None):
         self.loop = loop or asyncio.get_event_loop()
         self.roots = roots
@@ -47,7 +47,10 @@ class Crawler:
         self.max_redirect = max_redirect
         self.max_tries = max_tries
         self.max_tasks = max_tasks
-        self.proxy = proxy
+        if proxy:
+            self.proxy = get_proxy()
+        else:
+            self.proxy = None
         self.q = asyncio.Queue(loop=self.loop)
         self.seen_urls = set()
         self.done = []
@@ -58,7 +61,7 @@ class Crawler:
             host = urllib.parse.splitport(parts.netloc)[0]
             if not host:
                 continue
-            if re.match(r'^[\d\.]*$', host):
+            if re.match(r'^[\d.]*$', host):
                 self.root_domains.add(host)
             else:
                 host = host.lower()
@@ -81,25 +84,12 @@ class Crawler:
         host = host.lower()
         if host in self.root_domains:
             return True
-        if re.match(r'\A[\d\.]*\Z', host):
+        if re.match(r'\A[\d.]*\Z', host):
             return False
         if self.strict:
             return self._host_okay_strictish(host)
         else:
             return self._host_okay_lenient(host)
-
-    async def get_proxy(self):
-        '''Get the proxy from the Redis server'''
-        async with self.session.get("http://127.0.0.1:5010/get/") as response:
-            json_response = await response.json(content_type="text/plain")
-            proxy = json_response.get("proxy")
-            return 'http://{}'.format(proxy)
-
-    async def delete_proxy(self, proxy):
-        '''Drop the proxy that failed with 3 tries'''
-        r = await self.session.get(
-            "http://127.0.0.1:5010/delete/?proxy={}".format(proxy))
-        r.release()
 
     def _host_okay_strictish(self, host):
         """Check if a host should be crawled, strict-ish version.
@@ -136,21 +126,20 @@ class Crawler:
 
             encoding = pdict.get('charset', 'utf-8')
             if content_type in ('text/html', 'application/xml'):
-                try:
-                    text = await response.text()
-                except UnicodeDecodeError:
-                    text = await response.text(encoding='GB18030')
+                text = await response.text(encoding, "ignore")
 
                 # Replace href with (?:href|src) to follow image links.
                 urls = set(re.findall(r'''(?i)href=["']([^\s"'<>]+)''', text))
-                if urls:
-                    LOGGER.info('got %r distinct urls from %r',
-                                len(urls), response.url)
+
                 for url in urls:
                     normalized = urllib.parse.urljoin(str(response.url), url)
                     defragmented = urllib.parse.urldefrag(normalized)[0]
                     if self.url_allowed(defragmented):
                         links.add(defragmented)
+
+            if links:
+                LOGGER.info('got %r distinct urls from %r',
+                            len(links), response.url)
 
         stat = FetchStatistic(
             url=response.url,
@@ -167,24 +156,18 @@ class Crawler:
 
     async def fetch(self, url, max_redirect):
         """Fetch one URL."""
-        if self.proxy:
-            proxy = await self.get_proxy()
-        else:
-            proxy = None
         tries = 0
         exception = None
         while tries < self.max_tries:
             try:
-                response = await self.session.get(url, allow_redirects=False,
-                                                  proxy=proxy)
-
+                response = await self.session.get(url, allow_redirects=False, proxy=self.proxy)
                 if tries > 1:
                     LOGGER.info('try %r for %r success', tries, url)
-
+                    delete_proxy(self.proxy)
+                    self.proxy = get_proxy()
                 break
             except aiohttp.ClientError as client_error:
-                LOGGER.info('try %r for %r raised %r',
-                            tries, url, client_error)
+                LOGGER.info('try %r for %r raised %r', tries, url, client_error)
                 exception = client_error
 
             tries += 1
@@ -228,7 +211,7 @@ class Crawler:
                 stat, links = await self.parse_links(response)
                 self.record_statistic(stat)
                 for link in links.difference(self.seen_urls):
-                    self.q.put_nowait((link, self.max_redirect))
+                    self.q.put_nowait((link, max_redirect - 1))
                 self.seen_urls.update(links)
         finally:
             await response.release()
@@ -259,7 +242,7 @@ class Crawler:
 
     def add_url(self, url, max_redirect=None):
         """Add a URL to the queue if not seen before."""
-        if max_redirect is None:
+        if not max_redirect:
             max_redirect = self.max_redirect
         LOGGER.debug('adding %r %r', url, max_redirect)
         self.seen_urls.add(url)

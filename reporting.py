@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Reporting subsystem for web crawler."""
 
 import time
@@ -49,7 +48,6 @@ def report(crawler, file=None):
 
 def url_report(stat, stats, file=None):
     """Print a report on the state for this URL.
-
     Also update the Stats instance.
     """
     if stat.exception:
